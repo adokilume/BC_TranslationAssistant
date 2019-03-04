@@ -6,7 +6,7 @@ Unofficial translation tool for the game [Bondage College by Ben987](https://git
 
 1. Fork [Ben987/Bondage-College](https://github.com/Ben987/Bondage-College), then clone or download it to your local machine.
 2. In the folder you downloaded the game in, create a copy of any `_EN.csv` file(s) you wish to translate and rename them to change `EN` to your language's two-letter code.
-3. Download the `BC_TranslationAssistant.html` file and open it in any modern web browser.
+3. [Follow this link to use the Tool online.](https://adokilume.github.io/BC_TranslationAssistant/BC_TranslationAssistant.html) As an alternative, you can download the `BC_TranslationAssistant.html` file and open it in any modern web browser.
 4. Click the "Open File" dialog in the upper left corner and navigate to one of the CSV copies you've created to open it.
 5. To save your changes, hit "Save". The edited version of your file will be saved to your Browser's default download location (unless you configured your browser to ask you where to download files to). You will need to overwrite the old file with the new version.
 
