@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="X-UA-Compatible" content="ie=edge">
+        <title>Bondage College Translation Assistant</title>
+        <style>
+            html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                font-family: Arial, sans-serif;
+            }
+
+            #wrapper {
+                display: flex;
+                flex-flow: column nowrap;
+                width: 100%;
+                height: 100%;
+            }
+
+            #controls-container,
+            #editor-container,
+            #preview-container {
+                margin: 0.5em;
+            }
+
+            #editor-container {
+                flex-grow: 1;
+                overflow: auto;
+            }
+
+            #editor-table {
+                border-collapse: collapse;
+                min-width: 100%;
+                /*word-break: break-all;*/
+            }
+
+            #editor-table th,
+            #editor-table td {
+                cursor: default;
+                background-color: #eee;
+            }
+
+            #editor-table [contenteditable] {
+                cursor: text;
+                background-color: #fff;
+                white-space: pre;
+            }
+
+            #editor-table td {
+                border: 1px solid #aaa;
+                padding: 0.2em;
+            }
+
+            #editor-thead th {
+                position: sticky;
+                top: 0;
+                font-weight: normal;
+                font-size: 0.7em;
+                background-color: #ccc;
+                z-index: 9999;
+                border: 1px solid #aaa;
+                background-clip: padding-box;
+            }
+
+            #editor-tbody th {
+                position: sticky;
+                left: 0;
+                font-weight: normal;
+                font-size: 0.8em;
+                background-color: #ccc;
+                z-index: 9998;
+                border: 1px solid #aaa;
+                background-clip: padding-box;
+                /*word-break: normal;*/
+            }
+
+            .column-stage {
+                text-align: right;
+                color: #00f;
+            }
+
+            .column-code,
+            .inline-code {
+                color: #f80;
+                font-style: italic;
+                font-size: 0.8em;
+            }
+
+            .column-num {
+                text-align: center;
+                color: #aaa;
+            }
+
+            .column-num.positive {
+                font-weight: bold;
+                color: #0a0;
+            }
+
+            .column-num.negative {
+                font-weight: bold;
+                color: #f00;
+            }
+
+            .inline-linebreak {
+                font-weight: bold;
+                color: #f0f;
+            }
+
+            #editor-table [contenteditable].overflow {
+                background-color: #faa;
+            }
+
+            #editor-table [contenteditable].overflow-warning {
+                background-color: #ffa;
+            }
+
+            #editor-table :focus {
+                outline: 2px solid #0cf;
+            }
+
+            #preview-canvas {
+                float: left;
+                background-color: #aaa;
+                max-width: 100%;
+                margin: 0 0.5em 0.5em 0;
+                /*border: 1px solid #000;*/
+            }
+
+            .theme-dark {
+                background-color: #333;
+                color: #ccc;
+            }
+
+            .theme-dark #editor-table th {
+                background-color: #000;
+                color: #ccc;
+            }
+
+            .theme-dark #editor-table td {
+                background-color: #222;
+            }
+
+            .theme-dark #editor-table [contenteditable] {
+                background-color: #444;
+                color: #ddd;
+            }
+
+            .theme-dark #editor-table [contenteditable].overflow {
+                background-color: #faa;
+                color: #000;
+            }
+
+            .theme-dark #editor-table [contenteditable].overflow-warning {
+                background-color: #ffa;
+                color: #000;
+            }
+
+            .theme-dark #editor-table .column-stage {
+                color: #0af;
+            } 
+        </style>
+        <script>
+            'use strict';
+
+            let fileData, previewCanvas, ctx, spaceWidth, currentFileType, currentDataRow, textIsCutscene, Common_PlayerName, Common_Number;
+
+            window.addEventListener('load', init);
+
+            function init() {
+                previewCanvas = document.getElementById('preview-canvas');
+                ctx = previewCanvas.getContext('2d');
+                ctx.font = '24px Arial';
+                spaceWidth = ctx.measureText(' ').width;
+
+                document.getElementById('toggle-darkmode').addEventListener('change', function(e) {
+                    setDarkMode(e.target.checked);
+                });
+                if (window.localStorage) {
+                    if (localStorage.getItem('darkMode') === 'true') {
+                        document.getElementById('toggle-darkmode').checked = true;
+                        setDarkMode(true);
+                    }
+                }
+
+                document.getElementById('input-playername').addEventListener('input', function(e) {
+                    Common_PlayerName = e.target.value;
+                    drawPreview();
+                });
+
+                document.getElementById('input-common-number').addEventListener('input', function(e) {
+                    Common_Number = e.target.value;
+                    drawPreview();
+                });
+
+                document.getElementById('input-cutscene').addEventListener('change', function(e) {
+                    textIsCutscene = e.target.checked;
+                    if (currentFileType !== 'Text') return; // for whatever reason
+                    for (let cell of document.querySelectorAll('#editor-table td[contenteditable]')) {
+                        styleCell(cell, 'Content');
+                    }
+                    drawPreview();
+                });
+
+                document.getElementById('button-save').addEventListener('click', function() {
+                    let downloadLink = document.getElementById('download-link');
+                    if (!downloadLink.getAttribute('download')) downloadLink.setAttribute('download', '');
+                    downloadLink.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(generateCsv()));
+                    downloadLink.click();
+                });
+
+                let fileInput = document.getElementById('file-input');
+                fileInput.addEventListener('change', function(e) {
+                    loadFile(e.target.files[0]);
+                });
+                if (fileInput.value) loadFile(fileInput.files[0]);
+
+                window.addEventListener('beforeunload', function(e) {
+                    // TODO: only display this prompt if there are unsaved changes
+                    e.preventDefault();
+                    e.returnValue = '';
+                });
+            }
+
+            function loadFile(file) {
+                if (!file) {
+                    // TODO: error message?
+                    return;
+                }
+                let fr = new FileReader();
+                fr.onload = function() {
+                    currentFileType = file.name.split('_')[0];
+                    document.getElementById('input-cutscene').disabled = currentFileType !== 'Text';
+                    document.getElementById('download-link').setAttribute('download', file.name);
+                    displayFileContents(this.result);
+                };
+                fr.readAsText(file);
+            }
+
+            function displayFileContents(str) {
+                fileData = parseCsvToObject(str);
+                let thead = document.getElementById('editor-thead');
+                let tbody = document.getElementById('editor-tbody');
+                thead.innerHTML = '';
+                tbody.innerHTML = '';
+                let headerRow = document.createElement('tr');
+                thead.appendChild(headerRow);
+                let th = document.createElement('th');
+                th.textContent = '1';
+                headerRow.appendChild(th);
+                for (let header of fileData.headers) {
+                    let th = document.createElement('th');
+                    th.textContent = header;
+                    headerRow.appendChild(th);
+                }
+                for (let i = 0; i < fileData.rows.length; i++) {
+                    let dataRow = fileData.rows[i];
+                    let row = document.createElement('tr');
+                    tbody.appendChild(row);
+                    let th = document.createElement('th');
+                    th.textContent = (i + 2);
+                    row.appendChild(th);
+                    for (let header of fileData.headers) {
+                        let td = document.createElement('td');
+                        td.textContent = dataRow[header];
+                        let isTextField = styleCell(td, header);
+                        if (isTextField) {
+                            td.setAttribute('contenteditable', '');
+                            td.addEventListener('focus', function() {
+                                currentDataRow = dataRow;
+                                drawPreview();
+                            });
+                            td.addEventListener('input', function() {
+                                let override = {};
+                                override[header] = td.textContent;
+                                drawPreview(override);
+                            });
+                            td.addEventListener('blur', function() {
+                                updateData(dataRow, header, td.textContent);
+                                styleCell(td, header);
+                            });
+                        }
+                        row.appendChild(td);
+                    }
+                }
+            }
+
+            function parseCsvToObject(str) {
+                let arr = parseCsv(str);
+                let result = {};
+                result.headers = arr[0];
+                result.rows = [];
+                for (let y = 1; y < arr.length; y++) {
+                    let line = arr[y];
+                    let row = {};
+                    for (let x = 0; x < result.headers.length; x++) {
+                        row[result.headers[x]] = line[x];
+                    }
+                    result.rows.push(row);
+                }
+                return result;
+
+                // TODO: Detect malformed data (too many / not enough columns) and inform the user
+            }
+
+            // borrowed from Bondage College's code
+            function parseCsv(str) {
+                let arr = [];
+                let quote = false;  // true means we're inside a quoted field
+
+                // iterate over each character, keep track of current row and column (of the returned array)
+                for (let row = 0, col = 0, c = 0; c < str.length; c++) {
+                    let cc = str[c], nc = str[c+1];        // current character, next character
+                    arr[row] = arr[row] || [];             // create a new row if necessary
+                    arr[row][col] = arr[row][col] || '';   // create a new column (start with empty string) if necessary
+
+                    // If the current character is a quotation mark, and we're inside a
+                    // quoted field, and the next character is also a quotation mark,
+                    // add a quotation mark to the current column and skip the next character
+                    if (cc == '"' && quote && nc == '"') { arr[row][col] += cc; ++c; continue; }
+
+                    // If it's just one quotation mark, begin/end quoted field
+                    if (cc == '"') { quote = !quote; continue; }
+
+                    // If it's a comma and we're not in a quoted field, move on to the next column
+                    if (cc == ',' && !quote) { ++col; continue; }
+
+                    // If it's a newline and we're not in a quoted field, move on to the next
+                    // row and move to column 0 of that new row
+                    if (cc == '\n' && !quote) { ++row; col = 0; continue; }
+
+                    // ADDED to remove carriage returns, which could get deleted during editing and would mess up the output
+                    if (cc == '\r' && !quote) { continue; }
+
+                    // Otherwise, append the current character to the current column
+                    arr[row][col] += cc;
+                }
+                return arr;
+            }
+
+            function styleCell(td, header) {
+                switch (header) {
+                    case 'Stage':
+                    case 'NextStage':
+                        td.className = 'column-stage';
+                        break;
+                    case 'VarReq':
+                    case 'Image':
+                    case 'Image\r':
+                    case 'Function':
+                    case 'Function\r':
+                    case 'Tag':
+                        td.className = 'column-code';
+                        break;
+                    case 'LoveReq':
+                    case 'SubReq':
+                    case 'LoveMod':
+                    case 'SubMod':
+                        td.className = 'column-num';
+                        let num = parseInt(td.textContent);
+                        if (num > 0) td.classList.add('positive');
+                        else if (num < 0) td.classList.add('negative');
+                        break;
+                    case 'IntroText':
+                    case 'Interaction':
+                    case 'Result':
+                    case 'Content':
+                    case 'Content\r':
+                        td.innerHTML = td.textContent; // remove inner HTML tags before parsing, to avoid endless nesting
+                        td.innerHTML = td.innerHTML.replace('|', '<span class="inline-linebreak">|</span>');
+                        td.innerHTML = td.innerHTML.replace('COMMON_PLAYERNAME', '<span class="inline-code">COMMON_PLAYERNAME</span>');
+                        td.innerHTML = td.innerHTML.replace('COMMON_NUMBER', '<span class="inline-code">COMMON_NUMBER</span>');
+                        let minIndex = td.innerHTML.indexOf('ADD_MINUTES:');
+                        if (minIndex >= 0) {
+                            td.innerHTML = td.innerHTML.substring(0, minIndex) + '<span class="inline-code">' + td.innerHTML.substring(minIndex) + '</span>';
+                        }
+                        if (td.innerHTML.indexOf('@') === 0) {
+                            td.innerHTML = '<span class="inline-code">@</span>' + td.innerHTML.substring(1);
+                        }
+                        // width checking
+                        td.classList.remove('overflow');
+                        td.classList.remove('overflow-warning');
+                        let maxWidth = header === 'Interaction' ? 300 : header === 'Content' && textIsCutscene ? 900 : 600;
+                        let text = td.textContent;
+                        if (text[0] === '@') text = text.substring(1);
+                        if (text.indexOf('ADD_MINUTES:') >= 0) text = text.substring(0, text.indexOf('ADD_MINUTES:'));
+                        let overflow;
+                        if (text.indexOf('|') === -1) {
+                            overflow = ctx.measureText(text).width - maxWidth;
+                        } else {
+                            let o1 = ctx.measureText(text.substring(0, text.indexOf('|'))).width - maxWidth;
+                            let o2 = ctx.measureText(text.substring(text.indexOf('|'))).width - maxWidth;
+                            overflow = Math.max(o1, o2);
+                        }
+                        if (overflow > 0) {
+                            td.classList.add('overflow');
+                        } else if (overflow > -5) {
+                            td.classList.add('overflow-warning');
+                        }
+                        return true;
+                        break;
+                    default:
+                        break;
+                }
+                return false;
+            }
+
+            // borrowed from Bondage College's code (slightly modified)
+            function DrawText(Text, X, Y, Color) {
+                if (Text[0] === '@') Text = Text.substring(1);
+
+                // Replace the COMMON_PLAYERNAME keyword with the player name
+                Text = Text.replace("COMMON_PLAYERNAME", Common_PlayerName || "COMMON_PLAYERNAME");
+
+                // Replace the COMMON_NUMBER keyword with a number generated while playing the game
+                Text = Text.replace("COMMON_NUMBER", Common_Number || "COMMON_NUMBER");
+
+                // Remove the timing tag if present
+                if (Text.indexOf("ADD_MINUTES:") >= 0)
+                    Text = Text.substring(0, Text.indexOf("ADD_MINUTES:"));
+
+                // Font is fixed for now, color can be set
+                ctx.font = "24px Arial";
+                ctx.fillStyle = Color;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+
+                // Split the text on two lines if there's a |
+                if (Text.indexOf("|") == -1)
+                    ctx.fillText(Text, X, Y);
+                else {
+                    ctx.fillText(Text.substring(0, Text.indexOf("|")), X, Y - 19);
+                    ctx.fillText(Text.substring(Text.indexOf("|") + 1, 1000), X, Y + 19);
+                }
+            }
+
+            function drawPreview(override) {
+                if (!currentDataRow) return;
+                if (!override) override = {};
+                if (currentFileType === 'Intro' || currentFileType === 'Text' && !textIsCutscene) {
+                    previewCanvas.width = 600;
+                    ctx.fillStyle = '#fff';
+                    ctx.strokeStyle = '#000';
+                    ctx.fillRect(0, 0, 600, 90);
+                    ctx.strokeRect(0, 0, 600, 90);
+                    DrawText(override.IntroText || currentDataRow.IntroText || override.Content || currentDataRow.Content, 300, 45, 'black');
+                } else if (currentFileType === 'Stage') {
+                    previewCanvas.width = 900;
+                    ctx.fillStyle = '#fff';
+                    ctx.strokeStyle = '#000';
+                    ctx.fillRect(0, 0, 300, 90);
+                    ctx.strokeRect(0, 0, 300, 90);
+                    ctx.fillRect(300, 0, 600, 90);
+                    ctx.strokeRect(300, 0, 600, 90);
+                    DrawText(override.Interaction || currentDataRow.Interaction, 150, 45, 'red');
+                    DrawText(override.Result || currentDataRow.Result, 600, 45, 'black');
+                } else {
+                    previewCanvas.width = 900;
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(0, 0, 900, 90);
+                    DrawText(override.Content || currentDataRow.Content, 450, 45, 'white');
+                }
+            }
+
+            function updateData(data, header, content) {
+                data[header] = content;
+            }
+
+            function generateCsv() {
+                if (!fileData) return;
+                let result = '';
+                result = fileData.headers.join(',') + '\r\n';
+                for (let row of fileData.rows) {
+                    let fields = [];
+                    for (let header of fileData.headers) {
+                        let field = row[header].split('"').join('""');
+                        if (field.indexOf(',') >= 0 || field.indexOf('"') >= 0) field = '"' + field + '"';
+                        fields.push(field);
+                    }
+                    result += fields.join(',') + '\r\n';
+                }
+                return result;
+            }
+
+            function setDarkMode(enabled) {
+                if (enabled) {
+                    document.getElementById('wrapper').classList.add('theme-dark');
+                } else {
+                    document.getElementById('wrapper').classList.remove('theme-dark');
+                }
+                if (window.localStorage) {
+                    localStorage.setItem('darkMode', enabled);
+                }
+            }
+        </script>
+    </head>
+    <body>
+        <div id="wrapper">
+            <div id="controls-container">
+                <label for="file-input">Open CSV file:</label>
+                <input id="file-input" type="file" accept=".csv"/>
+                <button id="button-save">Save</button>
+                <a id="download-link" style="display: none;"></a>
+                <input type="checkbox" id="toggle-darkmode"/>
+                <label for="toggle-darkmode">Dark Mode</label>
+            </div>
+            <div id="editor-container">
+                <table id="editor-table">
+                    <thead id="editor-thead"></thead>
+                    <tbody id="editor-tbody"></tbody>
+                </table>
+            </div>
+            <div id="preview-container">
+                <canvas id="preview-canvas" width="900" height="90"></canvas>
+                <div id="preview-controls">
+                    <div title="The player name to be displayed in the preview. This doesn't affect overflow highlighting in the editor (it assumes &quot;COMMON_PLAYERNAME&quot;, which is slightly longer than the average name). To visually test the most extreme case, fill up the box with 20 capital Ms or Ws.">
+                        <label for="input-playername">Player Name:</label>
+                        <input id="input-playername" type="text" maxlength="20" placeholder="COMMON_PLAYERNAME"/>
+                    </div>
+                    <div title="The number to be displayed in the preview in place of the string &quot;COMMON_NUMBER&quot;. This doesn't affect overflow highlighting in the editor (it assumes &quot;COMMON_NUMBER&quot;, which is longer than most numbers the game will generate).">
+                        <label for="input-common-number">Test Number:</label>
+                        <input id="input-common-number" type="text" placeholder="COMMON_NUMBER"/>
+                    </div>
+                    <div title="Only applies to Text_*.csv files. Check this box if the text from the current file is used in a scene transition rather than for ingame dialogue. This changes the appearance of the preview, as well as the width used for overflow checking.">
+                        <input id="input-cutscene" type="checkbox" disabled/>
+                        <label for="input-cutscene">Text is cutscene</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>
